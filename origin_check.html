@@ -24,13 +24,14 @@
   .chip.o { background:var(--ok); color:var(--okc); }
   .chip.x { background:var(--ng); color:var(--ngc); }
   .chip.w { background:var(--warn); color:var(--warnc); }
+  .chip.n { background:#e8ebf3; color:#47506b; }
   progress { width:200px; height:10px; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
   th, td { border-bottom:1px solid var(--bd); padding:8px 10px; text-align:left; vertical-align:top; }
   th { background:#fafbfc; position:sticky; top:0; }
   td.res { font-weight:600; white-space:pre-wrap; }
-  tr.o td.res { color:var(--okc); } tr.x td.res { color:var(--ngc); } tr.w td.res { color:var(--warnc); }
-  tr.o { background:var(--ok); } tr.x { background:var(--ng); } tr.w { background:var(--warn); }
+  tr.o td.res { color:var(--okc); } tr.x td.res { color:var(--ngc); } tr.w td.res { color:var(--warnc); } tr.n td.res { color:#47506b; }
+  tr.o { background:var(--ok); } tr.x { background:var(--ng); } tr.w { background:var(--warn); } tr.n { background:#e8ebf3; }
   .tbl { max-height:560px; overflow:auto; border:1px solid var(--bd); border-radius:8px; }
   .desc { max-width:480px; color:#555; white-space:pre-wrap; word-break:break-all; }
   mark { background:#ffe58a; padding:0 1px; }
@@ -39,7 +40,7 @@
 <body>
 <div class="wrap">
   <h1>ERP원산지 ↔ 상품기술서 원산지 비교</h1>
-  <div class="sub">엑셀에서 A~E열 범위를 복사해서 아래에 붙여넣고 [시작]을 누르세요. (A: 상품코드 / C: ERP원산지 / E: 상품기술서)</div>
+  <div class="sub">엑셀에서 A~E열 범위를 복사해서 아래에 붙여넣고 [시작]을 누르세요. (A: 상품코드 / B: 상품명 / C: ERP원산지 / D: ERP코드 / E: 상품기술서)</div>
 
   <div class="card">
     <textarea id="input" placeholder="엑셀에서 A열~E열을 함께 복사(Ctrl+C / ⌘C)해서 여기에 붙여넣기 (Ctrl+V / ⌘V)"></textarea>
@@ -58,7 +59,7 @@
     <div class="stats" id="stats"></div>
     <div class="tbl" style="margin-top:12px">
       <table>
-        <thead><tr><th style="width:50px">#</th><th style="width:140px">상품코드</th><th style="width:140px">ERP원산지</th><th style="width:260px">결과</th><th>상품기술서 (원산지 부분)</th></tr></thead>
+        <thead><tr><th style="width:44px">#</th><th style="width:110px">상품코드</th><th style="width:200px">상품명</th><th style="width:110px">ERP코드</th><th style="width:110px">ERP원산지</th><th style="width:200px">결과</th><th>상품기술서 (원산지 부분)</th></tr></thead>
         <tbody id="tbody"></tbody>
       </table>
     </div>
@@ -223,7 +224,7 @@ function check(erp, rawDesc) {
   if (!e) return { type: 'w', text: 'ERP원산지 없음' };                       // 1
   if (norm(desc).includes(norm(e))) return { type: 'o', text: 'O' };          // 2
   const found = extractOrigin(desc);
-  if (found === null) return { type: 'w', text: '상기서 내 원산지 없음' };      // 4
+  if (found === null) return { type: 'n', text: '상기서 내 원산지 없음' };      // 4
   return { type: 'x', text: 'X: ' + e + ' / ' + found };                      // 3
 }
 
@@ -276,36 +277,38 @@ const xmlEsc = s => String(s == null ? '' : s).replace(/[\u0000-\u0008\u000B\u00
 // rows: [{code, erp, found, type, text}] → .xlsx 바이트
 function buildXlsx(rows) {
   const enc = new TextEncoder();
-  const heads = ['상품코드', 'ERP원산지', '상기서 원산지', '결과'];
-  const styleOf = { o: 2, x: 3, w: 4 };           // 결과열 색상: 초록/빨강/노랑
+  const heads = ['상품코드', '상품명', 'ERP코드', 'ERP원산지', '상기서 원산지', '결과'];
+  const styleOf = { o: 2, x: 3, w: 4, n: 5 };     // 결과열 색상: 초록/빨강/노랑/회청
   const cell = (ref, v, s) => `<c r="${ref}" t="inlineStr" s="${s}"><is><t xml:space="preserve">${xmlEsc(v)}</t></is></c>`;
-  const L = 'ABCD';
+  const L = 'ABCDEF';
   let sd = '<row r="1">' + heads.map((h, i) => cell(L[i] + '1', h, 1)).join('') + '</row>';
   rows.forEach((r, i) => {
     const n = i + 2;
-    sd += `<row r="${n}">` + cell('A' + n, r.code, 0) + cell('B' + n, r.erp, 0) + cell('C' + n, r.found, 0) +
-          cell('D' + n, r.text, styleOf[r.type] || 0) + '</row>';
+    sd += `<row r="${n}">` + cell('A' + n, r.code, 0) + cell('B' + n, r.name, 0) + cell('C' + n, r.erpCode, 0) +
+          cell('D' + n, r.erp, 0) + cell('E' + n, r.found, 0) + cell('F' + n, r.text, styleOf[r.type] || 0) + '</row>';
   });
   const sheet = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
     '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
     '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>' +
-    '<cols><col min="1" max="1" width="18" customWidth="1"/><col min="2" max="3" width="22" customWidth="1"/><col min="4" max="4" width="40" customWidth="1"/></cols>' +
-    `<sheetData>${sd}</sheetData><autoFilter ref="A1:D${rows.length + 1}"/></worksheet>`;
+    '<cols><col min="1" max="1" width="16" customWidth="1"/><col min="2" max="2" width="36" customWidth="1"/><col min="3" max="3" width="16" customWidth="1"/><col min="4" max="5" width="20" customWidth="1"/><col min="6" max="6" width="36" customWidth="1"/></cols>' +
+    `<sheetData>${sd}</sheetData><autoFilter ref="A1:F${rows.length + 1}"/></worksheet>`;
   const styles = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
     '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
     '<fonts count="2"><font><sz val="11"/><name val="Malgun Gothic"/></font><font><b/><sz val="11"/><name val="Malgun Gothic"/></font></fonts>' +
-    '<fills count="6"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>' +
+    '<fills count="7"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>' +
     '<fill><patternFill patternType="solid"><fgColor rgb="FFD9D9D9"/></patternFill></fill>' +
     '<fill><patternFill patternType="solid"><fgColor rgb="FFE6F6EA"/></patternFill></fill>' +
     '<fill><patternFill patternType="solid"><fgColor rgb="FFFDEAEA"/></patternFill></fill>' +
-    '<fill><patternFill patternType="solid"><fgColor rgb="FFFFF6E0"/></patternFill></fill></fills>' +
+    '<fill><patternFill patternType="solid"><fgColor rgb="FFFFF6E0"/></patternFill></fill>' +
+    '<fill><patternFill patternType="solid"><fgColor rgb="FFE8EBF3"/></patternFill></fill></fills>' +
     '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>' +
     '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
-    '<cellXfs count="5"><xf numFmtId="49" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>' +
+    '<cellXfs count="6"><xf numFmtId="49" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>' +
     '<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>' +
     '<xf numFmtId="49" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1" applyNumberFormat="1"/>' +
     '<xf numFmtId="49" fontId="0" fillId="4" borderId="0" xfId="0" applyFill="1" applyNumberFormat="1"/>' +
-    '<xf numFmtId="49" fontId="0" fillId="5" borderId="0" xfId="0" applyFill="1" applyNumberFormat="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
+    '<xf numFmtId="49" fontId="0" fillId="5" borderId="0" xfId="0" applyFill="1" applyNumberFormat="1"/>' +
+    '<xf numFmtId="49" fontId="0" fillId="6" borderId="0" xfId="0" applyFill="1" applyNumberFormat="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
   const files = [
     ['[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>'],
     ['_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'],
@@ -324,16 +327,16 @@ let results = [], filter = 'all';
 function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
 function render() {
-  const cnt = { o:0, x:0, w:0 };
+  const cnt = { o:0, x:0, w:0, n:0 };
   results.forEach(r => cnt[r.type]++);
   const chip = (k, label, cls, n) => `<span class="chip ${cls} ${filter===k?'active':''}" data-f="${k}">${label} ${n}</span>`;
   $('stats').innerHTML =
     chip('all','전체','',results.length) + chip('o','O (일치)','o',cnt.o) +
-    chip('x','X (불일치)','x',cnt.x) + chip('w','ERP/상기서 없음','w',cnt.w);
+    chip('x','X (불일치)','x',cnt.x) + chip('w','ERP원산지 없음','w',cnt.w) + chip('n','상기서 원산지 없음','n',cnt.n);
   $('stats').querySelectorAll('.chip').forEach(el => el.onclick = () => { filter = el.dataset.f; render(); });
   const list = results.filter(r => filter === 'all' || r.type === filter);
   $('tbody').innerHTML = list.map(r =>
-    `<tr class="${r.type}"><td>${r.no}</td><td>${esc(r.code)}</td><td>${esc(r.erp)}</td>` +
+    `<tr class="${r.type}"><td>${r.no}</td><td>${esc(r.code)}</td><td>${esc(r.name)}</td><td>${esc(r.erpCode)}</td><td>${esc(r.erp)}</td>` +
     `<td class="res">${esc(r.text)}</td><td class="desc">${esc(r.snip)}</td></tr>`).join('');
 }
 
@@ -348,9 +351,10 @@ $('start').onclick = async () => {
   $('prog').style.display = ''; $('prog').max = rows.length; $('prog').value = 0;
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
-    const code = (r[0] || '').trim(), erp = (r[2] || '').trim(), desc = r[4] || '';
+    const code = (r[0] || '').trim(), name = (r[1] || '').trim(), erpCode = (r[3] || '').trim(),
+          erp = (r[2] || '').trim(), desc = r[4] || '';
     const res = check(erp, desc);
-    results.push({ no: i + 1, code, erp, type: res.type, text: res.text, snip: snippet(desc),
+    results.push({ no: i + 1, code, name, erpCode, erp, type: res.type, text: res.text, snip: snippet(desc),
                    found: extractOrigin(stripHtml(desc)) || '' });
     if (i % 200 === 199) { $('prog').value = i + 1; await new Promise(r => setTimeout(r)); }
   }
