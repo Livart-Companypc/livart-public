@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ERP원산지 ↔ 상품기술서 원산지 비교</title>
+<style>
+  :root { --ok:#e6f6ea; --okc:#1b7a35; --ng:#fdeaea; --ngc:#c0392b; --warn:#fff6e0; --warnc:#9a6700; --bd:#d8dce2; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; margin:0; padding:24px; background:#f5f6f8; color:#222; }
+  .wrap { max-width:1200px; margin:0 auto; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .sub { color:#666; font-size:13px; margin-bottom:16px; }
+  .card { background:#fff; border:1px solid var(--bd); border-radius:10px; padding:16px; margin-bottom:16px; }
+  textarea { width:100%; height:180px; border:1px solid var(--bd); border-radius:8px; padding:10px; font-size:13px; font-family:ui-monospace,Menlo,monospace; resize:vertical; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:10px; }
+  button { border:1px solid var(--bd); background:#fff; padding:9px 16px; border-radius:8px; font-size:14px; cursor:pointer; }
+  button.primary { background:#2563eb; color:#fff; border-color:#2563eb; font-weight:600; }
+  button:disabled { opacity:.5; cursor:default; }
+  .hint { font-size:12px; color:#777; }
+  .stats { display:flex; gap:8px; flex-wrap:wrap; }
+  .chip { padding:6px 12px; border-radius:20px; font-size:13px; border:1px solid var(--bd); background:#fff; cursor:pointer; user-select:none; }
+  .chip.active { outline:2px solid #2563eb; }
+  .chip.o { background:var(--ok); color:var(--okc); }
+  .chip.x { background:var(--ng); color:var(--ngc); }
+  .chip.w { background:var(--warn); color:var(--warnc); }
+  progress { width:200px; height:10px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { border-bottom:1px solid var(--bd); padding:8px 10px; text-align:left; vertical-align:top; }
+  th { background:#fafbfc; position:sticky; top:0; }
+  td.res { font-weight:600; white-space:pre-wrap; }
+  tr.o td.res { color:var(--okc); } tr.x td.res { color:var(--ngc); } tr.w td.res { color:var(--warnc); }
+  tr.o { background:var(--ok); } tr.x { background:var(--ng); } tr.w { background:var(--warn); }
+  .tbl { max-height:560px; overflow:auto; border:1px solid var(--bd); border-radius:8px; }
+  .desc { max-width:480px; color:#555; white-space:pre-wrap; word-break:break-all; }
+  mark { background:#ffe58a; padding:0 1px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ERP원산지 ↔ 상품기술서 원산지 비교</h1>
+  <div class="sub">엑셀에서 A~E열 범위를 복사해서 아래에 붙여넣고 [시작]을 누르세요. (A: 상품코드 / C: ERP원산지 / E: 상품기술서)</div>
+
+  <div class="card">
+    <textarea id="input" placeholder="엑셀에서 A열~E열을 함께 복사(Ctrl+C / ⌘C)해서 여기에 붙여넣기 (Ctrl+V / ⌘V)"></textarea>
+    <div class="row">
+      <button class="primary" id="start">시작</button>
+      <button id="clear">초기화</button>
+      <button id="xlsx" disabled>엑셀(.xlsx)로 저장</button>
+      <button id="copy" disabled>결과 복사 (엑셀 붙여넣기용)</button>
+      <progress id="prog" value="0" max="1" style="display:none"></progress>
+      <span class="hint" id="info"></span>
+    </div>
+    <div class="hint" style="margin-top:8px">※ 첫 행이 제목행(상품코드 등)이면 자동으로 건너뜁니다. 비교 시 공백·대소문자는 무시합니다.</div>
+  </div>
+
+  <div class="card" id="resultCard" style="display:none">
+    <div class="stats" id="stats"></div>
+    <div class="tbl" style="margin-top:12px">
+      <table>
+        <thead><tr><th style="width:50px">#</th><th style="width:140px">상품코드</th><th style="width:140px">ERP원산지</th><th style="width:260px">결과</th><th>상품기술서 (원산지 부분)</th></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ===== 로직 시작 ===== */
+// 엑셀 복사 데이터(TSV, 셀 내 줄바꿈은 따옴표로 감싸짐) 파서
+function parseTSV(text) {
+  const rows = []; let row = [], cell = '', i = 0, inQ = false;
+  text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  while (i < text.length) {
+    const c = text[i];
+    if (inQ) {
+      if (c === '"') {
+        if (text[i+1] === '"') { cell += '"'; i += 2; continue; }
+        inQ = false; i++; continue;
+      }
+      cell += c; i++; continue;
+    }
+    if (c === '"' && cell === '') { inQ = true; i++; continue; }
+    if (c === '\t') { row.push(cell); cell = ''; i++; continue; }
+    if (c === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; i++; continue; }
+    cell += c; i++;
+  }
+  if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+  return rows.filter(r => r.some(v => String(v).trim() !== ''));
+}
+
+function stripHtml(s) {
+  return String(s || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|tr|li|h\d)>/gi, '\n')
+    .replace(/<\/(td|th)>/gi, '\t')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>');
+}
+// 같은 의미로 취급할 국가 표기: "대표명|다른 표기|영문..." (필요하면 한 줄씩 추가)
+const COUNTRY_LIST = `
+한국|대한민국|korea|southkorea|republicofkorea
+북한|northkorea|조선민주주의인민공화국
+중국|china|중화인민공화국
+일본|japan
+대만|taiwan|타이완
+홍콩|hongkong
+마카오|macau|macao
+베트남|vietnam
+태국|thailand
+인도네시아|indonesia
+말레이시아|malaysia
+싱가포르|singapore
+필리핀|philippines
+캄보디아|cambodia
+미얀마|myanmar|burma
+라오스|laos
+인도|india
+파키스탄|pakistan
+방글라데시|bangladesh
+스리랑카|srilanka
+네팔|nepal
+몽골|mongolia
+우즈베키스탄|uzbekistan
+카자흐스탄|kazakhstan
+튀르키예|터키|turkey|turkiye|türkiye
+이스라엘|israel
+아랍에미리트|아랍에미레이트|uae|unitedarabemirates
+사우디아라비아|saudiarabia
+이란|iran
+이라크|iraq
+요르단|jordan
+레바논|lebanon
+카타르|qatar
+쿠웨이트|kuwait
+오만
+이집트|egypt
+모로코|morocco
+튀니지|tunisia
+케냐|kenya
+에티오피아|ethiopia
+나이지리아|nigeria
+남아프리카공화국|남아공|southafrica
+미국|usa|unitedstates|unitedstatesofamerica|america
+캐나다|canada
+멕시코|mexico
+브라질|brazil
+아르헨티나|argentina
+칠레|chile
+페루|peru
+콜롬비아|colombia
+에콰도르|ecuador
+볼리비아|bolivia
+우루과이|uruguay
+베네수엘라|venezuela
+쿠바|cuba
+파나마|panama
+도미니카공화국|dominicanrepublic
+영국|unitedkingdom|england|greatbritain|britain
+아일랜드|ireland
+프랑스|france
+독일|germany
+이탈리아|italy
+스페인|spain
+포르투갈|portugal
+네덜란드|netherlands|holland
+벨기에|belgium
+스위스|switzerland
+오스트리아|austria
+스웨덴|sweden
+노르웨이|norway
+덴마크|denmark
+핀란드|finland
+아이슬란드|iceland
+폴란드|poland
+체코|czech|czechrepublic
+슬로바키아|slovakia
+슬로베니아|slovenia
+헝가리|hungary
+루마니아|romania
+불가리아|bulgaria
+세르비아|serbia
+크로아티아|croatia
+그리스|greece
+리투아니아|lithuania
+라트비아|latvia
+에스토니아|estonia
+러시아|russia
+우크라이나|ukraine
+호주|오스트레일리아|australia
+뉴질랜드|newzealand
+`;
+// 모든 표기를 국가별 고유 기호로 치환 → '인도'가 '인도네시아' 안에서 잘못 일치하는 일도 방지
+const COUNTRY_MAP = [];
+COUNTRY_LIST.trim().split('\n').forEach((line, idx) => {
+  const sym = String.fromCharCode(0xE000 + idx);
+  line.split('|').forEach(n => COUNTRY_MAP.push([n.trim().toLowerCase(), sym]));
+});
+COUNTRY_MAP.sort((a, b) => b[0].length - a[0].length);   // 긴 이름부터 치환
+const norm = s => {
+  let v = String(s || '').replace(/\s+/g, '').replace(/\./g, '').toLowerCase();
+  COUNTRY_MAP.forEach(([name, sym]) => { v = v.split(name).join(sym); });
+  return v;
+};
+
+// 상품기술서에서 '원산지/제조국' 라벨 뒤의 값을 추출 (없으면 null)
+function extractOrigin(desc) {
+  // 라벨 뒤의 구분자(공백, 콜론, 슬래시, 괄호, 줄바꿈 등)는 모두 건너뛰고 값을 읽음
+  const re = /(원산지|제조국)[\s\)\]\}:：=\-\/·|]*([^\n\t,;/|()]{1,40})/g;
+  const labels = /^(수입자|수입원|수입업자|제조사|제조자|제조업자|제조원|판매자|판매원|제조국|원산지|A\/S|품질보증)/;
+  let m; const found = [];
+  while ((m = re.exec(desc))) {
+    const v = m[2].trim();
+    if (v && !labels.test(v)) found.push(v);
+  }
+  return found.length ? found[0] : null;
+}
+
+// 규칙 판정
+function check(erp, rawDesc) {
+  const desc = stripHtml(rawDesc);
+  const e = String(erp || '').trim();
+  if (!e) return { type: 'w', text: 'ERP원산지 없음' };                       // 1
+  if (norm(desc).includes(norm(e))) return { type: 'o', text: 'O' };          // 2
+  const found = extractOrigin(desc);
+  if (found === null) return { type: 'w', text: '상기서 내 원산지 없음' };      // 4
+  return { type: 'x', text: 'X: ' + e + ' / ' + found };                      // 3
+}
+
+// 결과 표시용 상품기술서 발췌 (원산지 주변)
+function snippet(rawDesc) {
+  const d = stripHtml(rawDesc).replace(/[ \t]+/g, ' ');
+  const i = d.search(/원산지|제조국/);
+  if (i < 0) return d.trim().slice(0, 120) + (d.length > 120 ? '…' : '');
+  return (i > 30 ? '…' : '') + d.slice(Math.max(0, i - 30), i + 80).trim();
+}
+// ---- 엑셀(.xlsx) 생성: 외부 라이브러리 없이 직접 압축(무압축 zip)으로 만듦 ----
+function crc32(buf) {
+  if (!crc32.t) { crc32.t = []; for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; crc32.t[n] = c >>> 0; } }
+  let crc = -1;
+  for (let i = 0; i < buf.length; i++) crc = crc32.t[(crc ^ buf[i]) & 255] ^ (crc >>> 8);
+  return (crc ^ -1) >>> 0;
+}
+function zipStore(files) {
+  const enc = new TextEncoder(), parts = [], central = [];
+  let offset = 0;
+  const d = new Date();
+  const time = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+  const date = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+  files.forEach(f => {
+    const name = enc.encode(f.name), crc = crc32(f.data), size = f.data.length;
+    const lh = new DataView(new ArrayBuffer(30));
+    lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true);
+    lh.setUint16(10, time, true); lh.setUint16(12, date, true); lh.setUint32(14, crc, true);
+    lh.setUint32(18, size, true); lh.setUint32(22, size, true); lh.setUint16(26, name.length, true);
+    parts.push(new Uint8Array(lh.buffer), name, f.data);
+    const ch = new DataView(new ArrayBuffer(46));
+    ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true); ch.setUint16(8, 0x0800, true);
+    ch.setUint16(12, time, true); ch.setUint16(14, date, true); ch.setUint32(16, crc, true);
+    ch.setUint32(20, size, true); ch.setUint32(24, size, true); ch.setUint16(28, name.length, true); ch.setUint32(42, offset, true);
+    central.push(new Uint8Array(ch.buffer), name);
+    offset += 30 + name.length + size;
+  });
+  const cdSize = central.reduce((a, p) => a + p.length, 0);
+  const eo = new DataView(new ArrayBuffer(22));
+  eo.setUint32(0, 0x06054b50, true); eo.setUint16(8, files.length, true); eo.setUint16(10, files.length, true);
+  eo.setUint32(12, cdSize, true); eo.setUint32(16, offset, true);
+  const all = [...parts, ...central, new Uint8Array(eo.buffer)];
+  const out = new Uint8Array(all.reduce((a, p) => a + p.length, 0));
+  let pos = 0; all.forEach(p => { out.set(p, pos); pos += p.length; });
+  return out;
+}
+const xmlEsc = s => String(s == null ? '' : s).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+// rows: [{code, erp, found, type, text}] → .xlsx 바이트
+function buildXlsx(rows) {
+  const enc = new TextEncoder();
+  const heads = ['상품코드', 'ERP원산지', '상기서 원산지', '결과'];
+  const styleOf = { o: 2, x: 3, w: 4 };           // 결과열 색상: 초록/빨강/노랑
+  const cell = (ref, v, s) => `<c r="${ref}" t="inlineStr" s="${s}"><is><t xml:space="preserve">${xmlEsc(v)}</t></is></c>`;
+  const L = 'ABCD';
+  let sd = '<row r="1">' + heads.map((h, i) => cell(L[i] + '1', h, 1)).join('') + '</row>';
+  rows.forEach((r, i) => {
+    const n = i + 2;
+    sd += `<row r="${n}">` + cell('A' + n, r.code, 0) + cell('B' + n, r.erp, 0) + cell('C' + n, r.found, 0) +
+          cell('D' + n, r.text, styleOf[r.type] || 0) + '</row>';
+  });
+  const sheet = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+    '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>' +
+    '<cols><col min="1" max="1" width="18" customWidth="1"/><col min="2" max="3" width="22" customWidth="1"/><col min="4" max="4" width="40" customWidth="1"/></cols>' +
+    `<sheetData>${sd}</sheetData><autoFilter ref="A1:D${rows.length + 1}"/></worksheet>`;
+  const styles = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+    '<fonts count="2"><font><sz val="11"/><name val="Malgun Gothic"/></font><font><b/><sz val="11"/><name val="Malgun Gothic"/></font></fonts>' +
+    '<fills count="6"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>' +
+    '<fill><patternFill patternType="solid"><fgColor rgb="FFD9D9D9"/></patternFill></fill>' +
+    '<fill><patternFill patternType="solid"><fgColor rgb="FFE6F6EA"/></patternFill></fill>' +
+    '<fill><patternFill patternType="solid"><fgColor rgb="FFFDEAEA"/></patternFill></fill>' +
+    '<fill><patternFill patternType="solid"><fgColor rgb="FFFFF6E0"/></patternFill></fill></fills>' +
+    '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>' +
+    '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+    '<cellXfs count="5"><xf numFmtId="49" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>' +
+    '<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>' +
+    '<xf numFmtId="49" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1" applyNumberFormat="1"/>' +
+    '<xf numFmtId="49" fontId="0" fillId="4" borderId="0" xfId="0" applyFill="1" applyNumberFormat="1"/>' +
+    '<xf numFmtId="49" fontId="0" fillId="5" borderId="0" xfId="0" applyFill="1" applyNumberFormat="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
+  const files = [
+    ['[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>'],
+    ['_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'],
+    ['xl/workbook.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="원산지비교" sheetId="1" r:id="rId1"/></sheets></workbook>'],
+    ['xl/_rels/workbook.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'],
+    ['xl/styles.xml', styles],
+    ['xl/worksheets/sheet1.xml', sheet],
+  ].map(([name, xml]) => ({ name, data: enc.encode(xml) }));
+  return zipStore(files);
+}
+/* ===== 로직 끝 ===== */
+
+const $ = id => document.getElementById(id);
+let results = [], filter = 'all';
+
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+function render() {
+  const cnt = { o:0, x:0, w:0 };
+  results.forEach(r => cnt[r.type]++);
+  const chip = (k, label, cls, n) => `<span class="chip ${cls} ${filter===k?'active':''}" data-f="${k}">${label} ${n}</span>`;
+  $('stats').innerHTML =
+    chip('all','전체','',results.length) + chip('o','O (일치)','o',cnt.o) +
+    chip('x','X (불일치)','x',cnt.x) + chip('w','ERP/상기서 없음','w',cnt.w);
+  $('stats').querySelectorAll('.chip').forEach(el => el.onclick = () => { filter = el.dataset.f; render(); });
+  const list = results.filter(r => filter === 'all' || r.type === filter);
+  $('tbody').innerHTML = list.map(r =>
+    `<tr class="${r.type}"><td>${r.no}</td><td>${esc(r.code)}</td><td>${esc(r.erp)}</td>` +
+    `<td class="res">${esc(r.text)}</td><td class="desc">${esc(r.snip)}</td></tr>`).join('');
+}
+
+$('start').onclick = async () => {
+  const text = $('input').value;
+  if (!text.trim()) { $('info').textContent = '붙여넣은 데이터가 없습니다.'; return; }
+  let rows = parseTSV(text);
+  if (rows.length && /상품코드|상품\s*코드/.test(rows[0][0] || '')) rows.shift();   // 제목행 건너뛰기
+  results = []; filter = 'all';
+  $('resultCard').style.display = 'block';
+  $('start').disabled = true; $('copy').disabled = true; $('xlsx').disabled = true;
+  $('prog').style.display = ''; $('prog').max = rows.length; $('prog').value = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const code = (r[0] || '').trim(), erp = (r[2] || '').trim(), desc = r[4] || '';
+    const res = check(erp, desc);
+    results.push({ no: i + 1, code, erp, type: res.type, text: res.text, snip: snippet(desc),
+                   found: extractOrigin(stripHtml(desc)) || '' });
+    if (i % 200 === 199) { $('prog').value = i + 1; await new Promise(r => setTimeout(r)); }
+  }
+  $('prog').value = rows.length;
+  $('start').disabled = false; $('copy').disabled = !results.length; $('xlsx').disabled = !results.length;
+  $('info').textContent = `${results.length}행 검사 완료`;
+  render();
+};
+
+$('copy').onclick = async () => {
+  const tsv = results.map(r => r.text).join('\n');   // 입력 순서와 동일, 결과 열만 복사
+  try { await navigator.clipboard.writeText(tsv); $('info').textContent = '결과 열 복사됨 – 엑셀에서 붙여넣기 하세요'; }
+  catch { $('info').textContent = '복사 실패: 브라우저 권한을 확인하세요'; }
+};
+
+$('xlsx').onclick = () => {
+  const bytes = buildXlsx(results);   // 전체 결과 저장 (엑셀에서 필터로 O/X 골라볼 수 있음)
+  const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const d = new Date(), p = n => String(n).padStart(2, '0');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `원산지비교결과_${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}.xlsx`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+
+$('clear').onclick = () => {
+  $('input').value = ''; results = []; $('resultCard').style.display = 'none';
+  $('prog').style.display = 'none'; $('copy').disabled = true; $('xlsx').disabled = true; $('info').textContent = '';
+};
+</script>
+</body>
+</html>
